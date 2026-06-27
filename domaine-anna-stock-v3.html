@@ -1039,6 +1039,7 @@ function initGdriveTokenClient() {
 
 async function onDriveConnected() {
   gdriveConnected = true;
+  markEverConnected(); // remember this device has authenticated before
 
   // Get user email for display
   try {
@@ -1098,12 +1099,17 @@ async function driveRequest(url, method='GET', body=null) {
   try {
     const resp = await fetch(url, { method, headers, ...(body ? {body} : {}) });
     if (resp.status === 401) {
-      // Token expired — try silent refresh
+      // Token expired mid-session — attempt silent refresh
+      gdriveToken = null;
       gdriveConnected = false;
       setCloudStatus('error', 'Reconnecting…');
-      showSyncPanel(false);
-      setSyncBanner(true);
-      if (tokenClient) tokenClient.requestAccessToken({ prompt: '' });
+      if (tokenClient) {
+        tokenClient.requestAccessToken({ prompt: '' });
+      } else {
+        // GIS not ready yet — fall back to showing sign-in panel
+        showSyncPanel(false);
+        setSyncBanner(true);
+      }
       return null;
     }
     if (!resp.ok) return null;
@@ -1248,25 +1254,65 @@ async function tryAutoConnectDrive() {
   const savedToken = localStorage.getItem('gdriveToken');
   const savedTime  = parseInt(localStorage.getItem('gdriveTokenTime') || '0');
   const age = Date.now() - savedTime;
-  // GIS tokens last ~1 hour; if saved token is < 50 min old, try it
-  if (!savedToken || age > 50 * 60 * 1000) {
-    setSyncBanner(true);
-    showSyncPanel(false);
-    return;
+
+  // If we have a saved token that is still fresh (< 50 min), try it directly
+  if (savedToken && age <= 50 * 60 * 1000) {
+    gdriveToken = savedToken;
+    try {
+      const info = await driveRequest('https://www.googleapis.com/oauth2/v3/userinfo');
+      if (info && info.email) {
+        await onDriveConnected();
+        return;
+      }
+    } catch(e) {}
+    // Token rejected — fall through to silent refresh below
+    gdriveToken = null;
   }
-  gdriveToken = savedToken;
-  try {
-    const info = await driveRequest('https://www.googleapis.com/oauth2/v3/userinfo');
-    if (info && info.email) {
-      await onDriveConnected();
-    } else {
+
+  // Token expired or missing — try a silent (no-prompt) refresh if user
+  // previously connected. This avoids the "keep asking" loop on mobile.
+  const everConnected = localStorage.getItem('gdriveEverConnected');
+  if (everConnected) {
+    // Ensure token client is ready before requesting silently
+    if (!tokenClient) initGdriveTokenClient();
+    // Small delay to let GIS library finish loading
+    await new Promise(r => setTimeout(r, 500));
+    try {
+      await new Promise((resolve) => {
+        const originalCallback = tokenClient.callback;
+        // Temporarily wrap callback so we know when silent attempt completes
+        tokenClient.callback = async (resp) => {
+          tokenClient.callback = originalCallback; // restore
+          if (resp.error) {
+            // Silent refresh failed (e.g. user revoked) — show sign-in button
+            setSyncBanner(true);
+            showSyncPanel(false);
+            resolve();
+            return;
+          }
+          gdriveToken = resp.access_token;
+          localStorage.setItem('gdriveToken', gdriveToken);
+          localStorage.setItem('gdriveTokenTime', Date.now().toString());
+          await onDriveConnected();
+          resolve();
+        };
+        // prompt:'' means silent — no popup, uses existing Google session
+        tokenClient.requestAccessToken({ prompt: '' });
+      });
+    } catch(e) {
       setSyncBanner(true);
       showSyncPanel(false);
     }
-  } catch(e) {
+  } else {
+    // Never connected before — just show the sign-in panel
     setSyncBanner(true);
     showSyncPanel(false);
   }
+}
+
+// Called inside onDriveConnected to remember the user ever authenticated
+function markEverConnected() {
+  localStorage.setItem('gdriveEverConnected', '1');
 }
 
 let syncTimer = null;
