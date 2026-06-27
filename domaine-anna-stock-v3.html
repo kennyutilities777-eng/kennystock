@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Domaine Anna – Stock Management</title>
-<!-- Google Identity Services for Drive OAuth -->
-<script src="https://accounts.google.com/gsi/client" async defer></script>
+<!-- Google Identity Services -->
+<script src="https://accounts.google.com/gsi/client" defer></script>
 <style>
   :root {
     --gold: #B8963E;
@@ -485,10 +485,15 @@
     <div class="page active" id="page-dashboard">
       <div class="page-title">Dashboard</div>
       <div class="page-subtitle">Welcome to Domaine Anna Stock Management System</div>
-      <div id="firebase-setup-banner" style="display:none">
-        <h3>☁️ Connect to Google Drive (Real-Time Sync)</h3>
-        <p>To sync automatically between computer and mobile, connect to Google Drive. Go to <strong>Settings → Cloud Sync</strong> to sign in with Google. Once connected, all devices update instantly.</p>
-        <div style="margin-top:8px"><button class="btn btn-success btn-sm" onclick="showPage('settings');setTimeout(()=>document.getElementById('sync-section').scrollIntoView({behavior:'smooth'}),200)">Set Up Cloud Sync →</button></div>
+      <div id="firebase-setup-banner" style="display:none;background:linear-gradient(135deg,#1a3a5c,#0d2137);color:#90caf9;border:1px solid #2980B9;border-radius:10px;padding:16px 20px;margin-bottom:20px">
+        <div style="display:flex;align-items:center;gap:12px">
+          <div style="font-size:2rem">☁️</div>
+          <div style="flex:1">
+            <div style="font-weight:700;font-size:0.95rem;margin-bottom:4px">Enable Live Sync — Computer &amp; Mobile</div>
+            <div style="font-size:0.82rem;color:#b0bec5">Sign in with Google once and your data stays in sync across all devices automatically.</div>
+          </div>
+          <button class="btn btn-success btn-sm" onclick="showPage('settings');setTimeout(()=>document.getElementById('sync-section').scrollIntoView({behavior:'smooth'}),200)">Set Up Now →</button>
+        </div>
       </div>
       <div class="stats-grid" id="dash-stats"></div>
       <div class="card">
@@ -748,24 +753,54 @@
 
       <!-- CLOUD SYNC -->
       <div class="card" id="sync-section">
-        <div class="card-title">☁️ Cloud Sync (Google Drive – Real-Time)</div>
-        <div class="alert alert-info" style="margin-bottom:14px">
-          📱 <strong>How it works:</strong> Sign in with your Google account below. The app saves all data to a file called <strong>DomaineAnnaStock.json</strong> in your Google Drive. Any device (phone or computer) signed in with the same Google account will sync automatically every 30 seconds and whenever you make a change.
+        <div class="card-title">☁️ Google Drive – Live Sync</div>
+
+        <!-- NOT CONNECTED STATE -->
+        <div id="sync-panel-disconnected">
+          <div style="display:flex;align-items:center;gap:16px;background:linear-gradient(135deg,#0d2137,#1a3a5c);border-radius:12px;padding:20px;margin-bottom:16px">
+            <div style="font-size:3rem">☁️</div>
+            <div>
+              <div style="color:#90caf9;font-weight:700;font-size:1rem;margin-bottom:4px">Real-Time Sync — Computer &amp; Mobile</div>
+              <div style="color:#b0bec5;font-size:0.83rem">Your data saves automatically to Google Drive. Open the app on any device and it stays in sync.</div>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;margin-bottom:18px">
+            <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px;font-size:0.82rem;color:#166534">
+              <strong>📱 Mobile</strong><br>Open the same URL in Chrome on Android → tap Sign in → done.
+            </div>
+            <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:12px;font-size:0.82rem;color:#1e40af">
+              <strong>💻 Computer</strong><br>Sign in once below. Data auto-saves every 15 seconds and on every change.
+            </div>
+            <div style="background:#fdf4ff;border:1px solid #e9d5ff;border-radius:8px;padding:12px;font-size:0.82rem;color:#6b21a8">
+              <strong>🔄 Both devices</strong><br>Use the same Google account on both. Changes appear on the other device within 15 seconds.
+            </div>
+          </div>
+          <button class="btn btn-success" onclick="gdriveSignIn()" id="gdrive-signin-btn" style="font-size:1rem;padding:12px 28px">
+            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" style="width:18px;height:18px;vertical-align:middle;margin-right:8px">Sign in with Google
+          </button>
+          <div id="firebase-status" style="margin-top:12px;font-size:0.85rem;color:var(--text-light)">Not connected — click above to enable live sync.</div>
         </div>
-        <div style="background:#f8f4ff;border:1px solid #c9a6f5;border-radius:8px;padding:14px;margin-bottom:14px;font-size:0.83rem;color:#5b1fa3">
-          <strong>Quick Steps:</strong><br>
-          1. Click <strong>Sign in with Google</strong> below<br>
-          2. Allow access to Google Drive when prompted<br>
-          3. The app will create/sync a file in your Drive automatically<br>
-          4. On your phone, open this same HTML file and sign in with the same Google account
-        </div>
-        <div id="gdrive-signin-area">
-          <button class="btn btn-success" onclick="gdriveSignIn()" id="gdrive-signin-btn">🔐 Sign in with Google</button>
-          <button class="btn btn-danger btn-sm" onclick="gdriveSignOut()" id="gdrive-signout-btn" style="display:none">Sign Out</button>
-        </div>
-        <div id="firebase-status" style="margin-top:10px;font-size:0.85rem;color:var(--text-light)">Not connected. Click Sign in to enable sync.</div>
-        <div style="margin-top:10px;font-size:0.82rem;color:var(--text-light)">
-          <strong>Note:</strong> You need a Google account. The app only accesses files it creates — it cannot read your other Drive files.
+
+        <!-- CONNECTED STATE -->
+        <div id="sync-panel-connected" style="display:none">
+          <div style="display:flex;align-items:center;gap:14px;background:linear-gradient(135deg,#064e3b,#065f46);border-radius:12px;padding:16px;margin-bottom:14px">
+            <div style="font-size:2.5rem">✅</div>
+            <div style="flex:1">
+              <div style="color:#6ee7b7;font-weight:700;font-size:1rem">Live Sync Active</div>
+              <div id="sync-account-label" style="color:#a7f3d0;font-size:0.82rem;margin-top:2px">Connected</div>
+              <div style="color:#6ee7b7;font-size:0.78rem;margin-top:4px">Auto-syncing every 15 seconds ✓</div>
+            </div>
+            <div>
+              <div id="sync-last-time" style="color:#a7f3d0;font-size:0.75rem;text-align:right"></div>
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+            <button class="btn btn-success btn-sm" onclick="gdrivePushAll()">🔄 Sync Now</button>
+            <button class="btn btn-danger btn-sm" onclick="gdriveSignOut()" id="gdrive-signout-btn">Sign Out</button>
+          </div>
+          <div style="margin-top:10px;font-size:0.8rem;color:var(--text-light)">
+            📁 Data file: <strong>DomaineAnnaStock.json</strong> in your Google Drive &nbsp;|&nbsp; Only this app can read it.
+          </div>
         </div>
       </div>
 
@@ -947,59 +982,46 @@ function dbDelete(store, key) {
 }
 
 // ===================== GOOGLE DRIVE SYNC =====================
-// Uses Google Identity Services (GIS) + Drive REST API
-// Stores all data in a single file: DomaineAnnaStock.json in Drive root
+// Pre-configured for: https://kennyutilities777-eng.github.io/kennystock/domaine-anna-stock-v3.html
+// Client ID is set up in Google Cloud Console for this exact origin.
+// Users just click "Sign in with Google" — no setup needed.
 
-const GDRIVE_CLIENT_ID = ''; // Set this in Settings or leave blank to prompt
-const GDRIVE_SCOPES = 'https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/drive.file';
+const GDRIVE_CLIENT_ID = '275247807736-rut3j8htsdff7dv5e9r16j40ans8arvh.apps.googleusercontent.com';
+const GDRIVE_SCOPES    = 'https://www.googleapis.com/auth/drive.file';
 const GDRIVE_FILE_NAME = 'DomaineAnnaStock.json';
 
-let gdriveToken = null;
-let gdriveFileId = null;
-let gdriveConnected = false;
+let gdriveToken        = null;
+let gdriveFileId       = null;
+let gdriveConnected    = false;
 let gdrivePollInterval = null;
 let gdriveLastModified = null;
-let gdrivePushing = false;
-let tokenClient = null;
+let gdrivePushing      = false;
+let tokenClient        = null;
+let gdriveUserEmail    = '';
 
+// ---- UI helpers ----
 function setCloudStatus(status, label) {
   const dot = document.getElementById('cloud-dot');
   const lbl = document.getElementById('cloud-label');
   dot.className = status;
   lbl.textContent = label;
 }
-
 function setSyncBanner(visible) {
   document.getElementById('firebase-setup-banner').style.display = visible ? 'block' : 'none';
 }
-
-// ---- OAuth / Sign-in ----
-function gdriveSignIn() {
-  // Get client ID from settings or localStorage
-  const clientId = localStorage.getItem('gdriveClientId') || '';
-  if (!clientId) {
-    const id = prompt(
-      'Enter your Google OAuth Client ID.\n\n' +
-      'To get one:\n' +
-      '1. Go to console.cloud.google.com\n' +
-      '2. Create project → APIs & Services → Credentials\n' +
-      '3. Create OAuth 2.0 Client ID (Web application)\n' +
-      '4. Add your HTML file URL to "Authorised JavaScript origins"\n' +
-      '5. Paste the Client ID here\n\n' +
-      'Client ID:'
-    );
-    if (!id || !id.trim()) return showToast('Client ID required', 'error');
-    localStorage.setItem('gdriveClientId', id.trim());
-  }
-  initGdriveTokenClient();
-  tokenClient.requestAccessToken({ prompt: '' });
+function showSyncPanel(connected) {
+  document.getElementById('sync-panel-disconnected').style.display = connected ? 'none' : 'block';
+  document.getElementById('sync-panel-connected').style.display   = connected ? 'block' : 'none';
+}
+function updateLastSyncTime() {
+  const el = document.getElementById('sync-last-time');
+  if (el) el.textContent = 'Last sync: ' + new Date().toLocaleTimeString();
 }
 
+// ---- Token client init ----
 function initGdriveTokenClient() {
-  const clientId = localStorage.getItem('gdriveClientId') || '';
-  if (!clientId) return;
   tokenClient = google.accounts.oauth2.initTokenClient({
-    client_id: clientId,
+    client_id: GDRIVE_CLIENT_ID,
     scope: GDRIVE_SCOPES,
     callback: async (resp) => {
       if (resp.error) {
@@ -1009,51 +1031,88 @@ function initGdriveTokenClient() {
       }
       gdriveToken = resp.access_token;
       localStorage.setItem('gdriveToken', gdriveToken);
-      gdriveConnected = true;
-      setCloudStatus('connected', 'Drive ✓');
-      setSyncBanner(false);
-      document.getElementById('firebase-status').textContent = '✅ Connected to Google Drive. Auto-syncing every 30 seconds.';
-      document.getElementById('gdrive-signin-btn').style.display = 'none';
-      document.getElementById('gdrive-signout-btn').style.display = 'inline-flex';
-      showToast('Google Drive connected! ✓', 'success');
-      await gdrivePushAll();
-      startDrivePoll();
+      localStorage.setItem('gdriveTokenTime', Date.now().toString());
+      await onDriveConnected();
     },
   });
 }
 
+async function onDriveConnected() {
+  gdriveConnected = true;
+
+  // Get user email for display
+  try {
+    const info = await driveRequest('https://www.googleapis.com/oauth2/v3/userinfo');
+    if (info && info.email) {
+      gdriveUserEmail = info.email;
+      const lbl = document.getElementById('sync-account-label');
+      if (lbl) lbl.textContent = '👤 ' + info.email;
+    }
+  } catch(e) {}
+
+  setCloudStatus('connected', 'Drive ✓');
+  setSyncBanner(false);
+  showSyncPanel(true);
+  document.getElementById('firebase-status').textContent = '✅ Connected to Google Drive.';
+  showToast('Google Drive connected ✓', 'success');
+
+  // Find or create Drive file, pull latest, then push local
+  const found = await gdriveFindFile();
+  if (found) {
+    await gdrivePullAndApply(true); // force apply on first connect
+  } else {
+    await gdrivePushAll(); // first time — push local data
+  }
+  startDrivePoll();
+}
+
+// ---- Sign in / out ----
+function gdriveSignIn() {
+  if (!tokenClient) initGdriveTokenClient();
+  tokenClient.requestAccessToken({ prompt: 'select_account' });
+}
+
 function gdriveSignOut() {
-  const token = localStorage.getItem('gdriveToken');
-  if (token) google.accounts.oauth2.revoke(token);
-  gdriveToken = null; gdriveFileId = null; gdriveConnected = false;
+  if (gdriveToken) {
+    try { google.accounts.oauth2.revoke(gdriveToken); } catch(e) {}
+  }
+  gdriveToken = null; gdriveFileId = null; gdriveConnected = false; gdriveUserEmail = '';
   localStorage.removeItem('gdriveToken');
+  localStorage.removeItem('gdriveTokenTime');
   stopDrivePoll();
   setCloudStatus('', 'Offline');
   setSyncBanner(true);
-  document.getElementById('firebase-status').textContent = 'Disconnected from Google Drive.';
-  document.getElementById('gdrive-signin-btn').style.display = 'inline-flex';
-  document.getElementById('gdrive-signout-btn').style.display = 'none';
-  showToast('Disconnected from Google Drive');
+  showSyncPanel(false);
+  document.getElementById('firebase-status').textContent = 'Signed out.';
+  showToast('Signed out of Google Drive');
 }
 
-// ---- Drive File Operations ----
-async function driveRequest(url, method='GET', body=null, isJson=true) {
+// ---- Drive REST helpers ----
+async function driveRequest(url, method='GET', body=null) {
+  if (!gdriveToken) return null;
   const headers = { 'Authorization': 'Bearer ' + gdriveToken };
-  if (isJson && body) headers['Content-Type'] = 'application/json';
-  const opts = { method, headers };
-  if (body) opts.body = isJson ? JSON.stringify(body) : body;
-  const resp = await fetch(url, opts);
-  if (resp.status === 401) {
-    // Token expired, try refresh
-    gdriveConnected = false;
-    setCloudStatus('error', 'Reconnecting...');
-    document.getElementById('firebase-status').textContent = '⚠️ Session expired. Click Sign in to reconnect.';
+  if (body && typeof body === 'object' && !(body instanceof FormData)) {
+    headers['Content-Type'] = 'application/json';
+    body = JSON.stringify(body);
+  }
+  try {
+    const resp = await fetch(url, { method, headers, ...(body ? {body} : {}) });
+    if (resp.status === 401) {
+      // Token expired — try silent refresh
+      gdriveConnected = false;
+      setCloudStatus('error', 'Reconnecting…');
+      showSyncPanel(false);
+      setSyncBanner(true);
+      if (tokenClient) tokenClient.requestAccessToken({ prompt: '' });
+      return null;
+    }
+    if (!resp.ok) return null;
+    const ct = resp.headers.get('content-type') || '';
+    if (ct.includes('json')) return resp.json();
+    return resp.text();
+  } catch(e) {
     return null;
   }
-  if (!resp.ok) return null;
-  const ct = resp.headers.get('content-type') || '';
-  if (ct.includes('json')) return resp.json();
-  return resp.text();
 }
 
 async function gdriveFindFile() {
@@ -1068,53 +1127,32 @@ async function gdriveFindFile() {
   return false;
 }
 
-async function gdriveReadFile() {
-  if (!gdriveFileId) return null;
-  const text = await driveRequest(
-    `https://www.googleapis.com/drive/v3/files/${gdriveFileId}?alt=media`
-  );
-  if (!text) return null;
-  try { return JSON.parse(text); } catch { return null; }
-}
-
 async function gdriveWriteFile(data) {
   const content = JSON.stringify(data);
-  const blob = new Blob([content], { type: 'application/json' });
-
   if (!gdriveFileId) {
-    // Create new file using multipart upload
-    const boundary = '-------314159265358979323846';
-    const delimiter = '\r\n--' + boundary + '\r\n';
-    const close_delim = '\r\n--' + boundary + '--';
-    const metadata = { name: GDRIVE_FILE_NAME, mimeType: 'application/json' };
-    const multipart = delimiter +
-      'Content-Type: application/json\r\n\r\n' + JSON.stringify(metadata) +
-      delimiter + 'Content-Type: application/json\r\n\r\n' + content + close_delim;
-    const headers = {
-      'Authorization': 'Bearer ' + gdriveToken,
-      'Content-Type': 'multipart/related; boundary="' + boundary + '"',
-    };
-    const resp = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,modifiedTime', {
-      method: 'POST', headers, body: multipart
-    });
-    if (resp.ok) {
-      const r = await resp.json();
-      gdriveFileId = r.id;
-      gdriveLastModified = r.modifiedTime;
-    }
+    // Create new file
+    const boundary = 'dabound314159';
+    const body =
+      `--${boundary}\r\nContent-Type: application/json\r\n\r\n` +
+      JSON.stringify({ name: GDRIVE_FILE_NAME, mimeType: 'application/json' }) +
+      `\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n` +
+      content + `\r\n--${boundary}--`;
+    const resp = await fetch(
+      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,modifiedTime',
+      { method: 'POST', headers: { 'Authorization': 'Bearer ' + gdriveToken, 'Content-Type': `multipart/related; boundary="${boundary}"` }, body }
+    );
+    if (resp.ok) { const r = await resp.json(); gdriveFileId = r.id; gdriveLastModified = r.modifiedTime; }
   } else {
     // Update existing file
     const resp = await fetch(
       `https://www.googleapis.com/upload/drive/v3/files/${gdriveFileId}?uploadType=media&fields=modifiedTime`,
       { method: 'PATCH', headers: { 'Authorization': 'Bearer ' + gdriveToken, 'Content-Type': 'application/json' }, body: content }
     );
-    if (resp.ok) {
-      const r = await resp.json();
-      gdriveLastModified = r.modifiedTime;
-    }
+    if (resp.ok) { const r = await resp.json(); gdriveLastModified = r.modifiedTime; }
   }
 }
 
+// ---- Push local → Drive ----
 async function gdrivePushAll() {
   if (!gdriveConnected || !gdriveToken || gdrivePushing) return;
   gdrivePushing = true;
@@ -1123,48 +1161,46 @@ async function gdrivePushAll() {
     const [bots, cos, txs, sets, sls] = await Promise.all([
       dbGetAll('bottles'), dbGetAll('companies'), dbGetAll('transactions'), dbGetAll('settings'), dbGetAll('sales')
     ]);
-    await gdriveWriteFile({ bottles: bots, companies: cos, transactions: txs, settings: sets, sales: sls, savedAt: new Date().toISOString(), version: 3 });
+    await gdriveWriteFile({ bottles: bots, companies: cos, transactions: txs, settings: sets, sales: sls, savedAt: new Date().toISOString(), version: 4 });
     showSyncStatus('synced');
+    updateLastSyncTime();
   } catch(e) {
     console.error('Drive push error:', e);
     showSyncStatus('error');
   } finally { gdrivePushing = false; }
 }
 
-// Alias so all existing syncToFirebase() calls work transparently
-async function syncToFirebase() {
-  await gdrivePushAll();
-}
+// Alias used throughout the app
+async function syncToFirebase() { await gdrivePushAll(); }
 
-async function gdrivePullAndMerge() {
+// ---- Pull Drive → local ----
+async function gdrivePullAndApply(force = false) {
   if (!gdriveConnected || !gdriveToken) return;
   try {
-    // Check if remote file is newer
+    // Check modified time
     const res = await driveRequest(
       `https://www.googleapis.com/drive/v3/files?q=name%3D'${GDRIVE_FILE_NAME}'+and+trashed%3Dfalse&fields=files(id,modifiedTime)&spaces=drive`
     );
-    if (!res || !res.files || !res.files.length) {
-      // No file yet — push local data
-      await gdrivePushAll();
-      return;
-    }
-    const remoteId = res.files[0].id;
+    if (!res || !res.files || !res.files.length) { await gdrivePushAll(); return; }
+    gdriveFileId = res.files[0].id;
     const remoteMod = res.files[0].modifiedTime;
-    gdriveFileId = remoteId;
-
-    if (gdriveLastModified && remoteMod <= gdriveLastModified) return; // No changes
+    if (!force && gdriveLastModified && remoteMod <= gdriveLastModified) return; // no change
     gdriveLastModified = remoteMod;
 
-    const data = await gdriveReadFile();
-    if (!data) return;
+    // Download and apply
+    const text = await driveRequest(`https://www.googleapis.com/drive/v3/files/${gdriveFileId}?alt=media`);
+    if (!text) return;
+    let data;
+    try { data = JSON.parse(text); } catch { return; }
 
-    // Apply remote data to IndexedDB
     for (const store of ['bottles','companies','transactions','settings','sales']) {
-      const remoteArr = data[store] || [];
-      if (!remoteArr.length) continue;
-      const tx = db.transaction(store, 'readwrite');
-      await new Promise(r => { tx.objectStore(store).clear().onsuccess = r; });
-      for (const item of remoteArr) {
+      const arr = data[store] || [];
+      if (!arr.length) continue;
+      await new Promise(r => {
+        const tx = db.transaction(store, 'readwrite');
+        tx.objectStore(store).clear().onsuccess = () => r();
+      });
+      for (const item of arr) {
         await new Promise(r => {
           const req = db.transaction(store, 'readwrite').objectStore(store).put(item);
           req.onsuccess = r; req.onerror = r;
@@ -1172,61 +1208,64 @@ async function gdrivePullAndMerge() {
       }
     }
 
-    // Reload in-memory state
-    bottles = await dbGetAll('bottles');
+    // Reload memory
+    bottles   = await dbGetAll('bottles');
     companies = await dbGetAll('companies');
-    sales = await dbGetAll('sales');
+    sales     = await dbGetAll('sales');
     await loadCustomTypes();
     await loadLocationLabels();
     populateCompanySelects();
 
     // Refresh current page
-    if (currentPage === 'dashboard') loadDashboard();
-    else if (currentPage === 'bottles') renderBottles();
-    else if (currentPage === 'stocktake') renderStocktake();
-    else if (currentPage === 'sell') renderSellList();
-    else if (currentPage === 'sales-history') renderSalesHistory();
-    else if (currentPage === 'companies') renderCompanies();
+    const refreshMap = {
+      dashboard: loadDashboard,
+      bottles: renderBottles,
+      stocktake: renderStocktake,
+      sell: renderSellList,
+      'sales-history': renderSalesHistory,
+      companies: renderCompanies,
+    };
+    if (refreshMap[currentPage]) refreshMap[currentPage]();
 
     showSyncStatus('synced');
+    updateLastSyncTime();
   } catch(e) {
     console.error('Drive pull error:', e);
   }
 }
 
+// ---- Polling ----
 function startDrivePoll() {
   stopDrivePoll();
-  gdrivePollInterval = setInterval(gdrivePullAndMerge, 30000); // Poll every 30 seconds
+  gdrivePollInterval = setInterval(() => gdrivePullAndApply(false), 15000);
 }
 function stopDrivePoll() {
   if (gdrivePollInterval) { clearInterval(gdrivePollInterval); gdrivePollInterval = null; }
 }
 
+// ---- Auto-reconnect on load ----
 async function tryAutoConnectDrive() {
-  const clientId = localStorage.getItem('gdriveClientId');
   const savedToken = localStorage.getItem('gdriveToken');
-  if (!clientId || !savedToken) { setSyncBanner(true); return; }
-  // Silently try to use the saved token
+  const savedTime  = parseInt(localStorage.getItem('gdriveTokenTime') || '0');
+  const age = Date.now() - savedTime;
+  // GIS tokens last ~1 hour; if saved token is < 50 min old, try it
+  if (!savedToken || age > 50 * 60 * 1000) {
+    setSyncBanner(true);
+    showSyncPanel(false);
+    return;
+  }
   gdriveToken = savedToken;
-  initGdriveTokenClient();
-  // Verify token is still valid by calling Drive
   try {
-    const res = await driveRequest('https://www.googleapis.com/drive/v3/about?fields=user');
-    if (res && res.user) {
-      gdriveConnected = true;
-      setCloudStatus('connected', 'Drive ✓');
-      setSyncBanner(false);
-      document.getElementById('firebase-status').textContent = '✅ Connected to Google Drive. Auto-syncing every 30 seconds.';
-      document.getElementById('gdrive-signin-btn').style.display = 'none';
-      document.getElementById('gdrive-signout-btn').style.display = 'inline-flex';
-      await gdriveFindFile();
-      await gdrivePullAndMerge();
-      startDrivePoll();
+    const info = await driveRequest('https://www.googleapis.com/oauth2/v3/userinfo');
+    if (info && info.email) {
+      await onDriveConnected();
     } else {
       setSyncBanner(true);
+      showSyncPanel(false);
     }
   } catch(e) {
     setSyncBanner(true);
+    showSyncPanel(false);
   }
 }
 
@@ -1234,10 +1273,10 @@ let syncTimer = null;
 function showSyncStatus(state) {
   const el = document.getElementById('sync-status');
   el.className = state;
-  const labels = { syncing: '⟳ Syncing...', synced: '✓ Synced', error: '⚠️ Sync Error', offline: '📴 Offline' };
+  const labels = { syncing: '⟳ Syncing…', synced: '✓ Synced', error: '⚠️ Sync Error', offline: '📴 Offline' };
   el.textContent = labels[state] || '';
   if (syncTimer) clearTimeout(syncTimer);
-  if (state === 'synced') syncTimer = setTimeout(() => { el.className = ''; }, 2000);
+  if (state === 'synced') syncTimer = setTimeout(() => { el.className = ''; el.textContent = ''; }, 2500);
 }
 
 // ===================== HELPERS =====================
@@ -2105,14 +2144,15 @@ async function loadSettings() {
   document.getElementById('set-co-contact').value = obj.coContact;
   renderTypesList();
   renderLabelEditor();
-  // Show Google Drive status
-  document.getElementById('firebase-status').textContent = gdriveConnected
-    ? '✅ Connected to Google Drive. Auto-syncing every 30 seconds.'
-    : (localStorage.getItem('gdriveClientId') ? '⚠️ Not connected. Click Sign in to reconnect.' : 'Not connected. Click Sign in to enable sync.');
-  if (gdriveConnected) {
-    document.getElementById('gdrive-signin-btn').style.display = 'none';
-    document.getElementById('gdrive-signout-btn').style.display = 'inline-flex';
+  // Sync panel state
+  showSyncPanel(gdriveConnected);
+  if (gdriveConnected && gdriveUserEmail) {
+    const lbl = document.getElementById('sync-account-label');
+    if (lbl) lbl.textContent = '👤 ' + gdriveUserEmail;
   }
+  document.getElementById('firebase-status').textContent = gdriveConnected
+    ? '✅ Connected to Google Drive. Auto-syncing every 15 seconds.'
+    : 'Not connected — click Sign in with Google to enable live sync.';
 }
 async function saveSettings() {
   const map = { coName:'set-co-name',coAddr:'set-co-addr',coBrn:'set-co-brn',coVat:'set-co-vat',coTel:'set-co-tel',coEmail:'set-co-email',coContact:'set-co-contact' };
@@ -2179,7 +2219,9 @@ async function init() {
   await loadDashboard();
   await checkSundayAlert();
   
-  // Try auto-connect Google Drive
+  // Init token client early so GIS library is ready
+  initGdriveTokenClient();
+  // Try auto-reconnect if token saved and still fresh
   await tryAutoConnectDrive();
 }
 
