@@ -2392,6 +2392,8 @@ function revealDriveFileId() {
     if (btn)     { btn.style.display = 'none'; }
   }
 }
+
+function updateSharedFileIdStatus() {
   const el = document.getElementById('shared-file-id-status');
   if (!el) return;
   if (GDRIVE_SHARED_FILE_ID) {
