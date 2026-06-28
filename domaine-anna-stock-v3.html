@@ -796,10 +796,15 @@
           </div>
           <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
             <button class="btn btn-success btn-sm" onclick="gdrivePushAll()">🔄 Sync Now</button>
+            <button class="btn btn-info btn-sm" onclick="openFileInDrive()" id="open-in-drive-btn" style="display:none">📂 Open File in Drive</button>
             <button class="btn btn-danger btn-sm" onclick="gdriveSignOut()" id="gdrive-signout-btn">Sign Out</button>
           </div>
           <div style="margin-top:10px;font-size:0.8rem;color:var(--text-light)">
             📁 Data file: <strong>DomaineAnnaStock.json</strong> in your Google Drive &nbsp;|&nbsp; Only this app can read it.
+          </div>
+          <div id="drive-file-id-display" style="display:none;margin-top:6px;font-size:0.78rem;color:var(--text-light);word-break:break-all">
+            🔑 File ID: <span id="drive-file-id-value" style="font-family:monospace;background:#f5f5f5;padding:2px 6px;border-radius:4px;user-select:all"></span>
+            <button onclick="copyFileId()" style="background:none;border:1px solid var(--border);border-radius:4px;padding:2px 8px;font-size:0.75rem;cursor:pointer;margin-left:6px">Copy</button>
           </div>
           <!-- SHARED FILE ID (cross-account sync fix) -->
           <div style="margin-top:16px;padding:14px;background:#fdf4ff;border:1px solid #e9d5ff;border-radius:8px">
@@ -1200,6 +1205,8 @@ function updateConnectedUI() {
           ? 'Session expired — click Sign in with Google to reconnect.'
           : 'Not connected — click Sign in with Google to enable live sync.');
   }
+
+  revealDriveFileId();
 }
 
 // ---- Drive REST helpers ----
@@ -1295,6 +1302,7 @@ async function gdrivePushAll() {
     await gdriveWriteFile({ bottles: bots, companies: cos, transactions: txs, settings: sets, sales: sls, savedAt: new Date().toISOString(), version: 4 });
     showSyncStatus('synced');
     updateLastSyncTime();
+    revealDriveFileId();
   } catch(e) {
     console.error('Drive push error:', e);
     showSyncStatus('error');
@@ -2355,7 +2363,35 @@ async function loadSettings() {
   }
 }
 
-function updateSharedFileIdStatus() {
+function openFileInDrive() {
+  if (!gdriveFileId) { showToast('File not found yet — click Sync Now first', 'error'); return; }
+  window.open('https://drive.google.com/file/d/' + gdriveFileId + '/view', '_blank');
+}
+
+function copyFileId() {
+  if (!gdriveFileId) return;
+  navigator.clipboard.writeText(gdriveFileId).then(() => showToast('File ID copied ✓')).catch(() => {
+    // fallback
+    const el = document.getElementById('drive-file-id-value');
+    const range = document.createRange(); range.selectNode(el);
+    window.getSelection().removeAllRanges(); window.getSelection().addRange(range);
+    showToast('Select the highlighted ID and copy manually');
+  });
+}
+
+function revealDriveFileId() {
+  const display = document.getElementById('drive-file-id-display');
+  const value   = document.getElementById('drive-file-id-value');
+  const btn     = document.getElementById('open-in-drive-btn');
+  if (gdriveFileId) {
+    if (display) { display.style.display = 'block'; }
+    if (value)   { value.textContent = gdriveFileId; }
+    if (btn)     { btn.style.display = 'inline-flex'; }
+  } else {
+    if (display) { display.style.display = 'none'; }
+    if (btn)     { btn.style.display = 'none'; }
+  }
+}
   const el = document.getElementById('shared-file-id-status');
   if (!el) return;
   if (GDRIVE_SHARED_FILE_ID) {
