@@ -801,6 +801,22 @@
           <div style="margin-top:10px;font-size:0.8rem;color:var(--text-light)">
             📁 Data file: <strong>DomaineAnnaStock.json</strong> in your Google Drive &nbsp;|&nbsp; Only this app can read it.
           </div>
+          <!-- SHARED FILE ID (cross-account sync fix) -->
+          <div style="margin-top:16px;padding:14px;background:#fdf4ff;border:1px solid #e9d5ff;border-radius:8px">
+            <div style="font-weight:700;color:#6b21a8;font-size:0.9rem;margin-bottom:6px">🔗 Shared File ID (multi-user sync)</div>
+            <div style="font-size:0.8rem;color:#7c3aed;margin-bottom:10px">
+              By default every Google account reads its own private Drive file — so different users never share data.
+              To make all users read/write the <em>same</em> file, paste its Drive File ID here.
+              <br><strong>How:</strong> one person signs in, opens Drive, right-clicks <em>DomaineAnnaStock.json</em> → Share with other users → copy the file ID from its URL (the long string between <code>/d/</code> and <code>/view</code>).
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+              <input id="shared-file-id-input" placeholder="Paste Drive file ID here…" style="flex:1;min-width:200px;padding:8px 12px;border:1.5px solid #c4b5fd;border-radius:7px;font-size:0.88rem"
+                value="">
+              <button class="btn btn-purple btn-sm" onclick="saveSharedFileId()">💾 Save</button>
+              <button class="btn btn-outline btn-sm" onclick="clearSharedFileId()" style="color:#6b21a8;border-color:#c4b5fd">✕ Clear</button>
+            </div>
+            <div id="shared-file-id-status" style="margin-top:8px;font-size:0.78rem;color:#6b21a8"></div>
+          </div>
         </div>
       </div>
 
@@ -991,6 +1007,13 @@ const GDRIVE_FILE_NAME = 'DomaineAnnaStock.json';
 // Redirect URI must exactly match an entry in Google Cloud Console → OAuth → Authorised redirect URIs
 const GDRIVE_REDIRECT_URI = location.origin + location.pathname;
 
+// ---- Shared file ID (Fix for cross-account sync) ----
+// When set, ALL users read/write this one specific Drive file instead of
+// each user's own copy. Paste the file ID from the shared file's URL here,
+// or enter it in Settings → Google Drive → Shared File ID.
+// Leave empty ('') to use each user's own Drive file (single-user mode).
+let GDRIVE_SHARED_FILE_ID = localStorage.getItem('gdriveSharedFileId') || '';
+
 let gdriveToken        = null;
 let gdriveFileId       = null;
 let gdriveConnected    = false;
@@ -999,6 +1022,7 @@ let gdriveLastModified = null;
 let gdrivePushing      = false;
 let tokenClient        = null; // GIS token client (desktop)
 let gdriveUserEmail    = '';
+let gdriveSigningIn    = false; // guard against double sign-in (Android loop fix)
 
 // ---- Detect mobile (Android / iOS) ----
 function isMobileBrowser() {
@@ -1091,8 +1115,13 @@ function initGdriveTokenClient() {
 
 // ---- Sign in: redirect on mobile, GIS popup on desktop ----
 function gdriveSignIn() {
+  // Guard: prevent a second sign-in being triggered while one is in progress.
+  // This is the main cause of the Android login-loop bug.
+  if (gdriveSigningIn || gdriveConnected) return;
+  gdriveSigningIn = true;
+
   if (isMobileBrowser()) {
-    gdriveSignInRedirect();
+    gdriveSignInRedirect(); // page will navigate away; flag resets on return
   } else {
     if (!tokenClient) initGdriveTokenClient();
     if (tokenClient) {
@@ -1108,7 +1137,7 @@ function gdriveSignOut() {
   if (gdriveToken) {
     try { if (typeof google !== 'undefined') google.accounts.oauth2.revoke(gdriveToken); } catch(e) {}
   }
-  gdriveToken = null; gdriveFileId = null; gdriveConnected = false;
+  gdriveToken = null; gdriveFileId = null; gdriveConnected = false; gdriveSigningIn = false;
   // Keep gdriveUserEmail and gdriveEverConnected so the UI shows
   // "reconnect" rather than "first time setup" after sign-out
   localStorage.removeItem('gdriveToken');
@@ -1122,6 +1151,7 @@ function gdriveSignOut() {
 // ---- After successful auth ----
 async function onDriveConnected() {
   gdriveConnected = true;
+  gdriveSigningIn = false; // reset guard
   localStorage.setItem('gdriveEverConnected', '1');
 
   // Get user email for display
@@ -1204,6 +1234,21 @@ async function driveRequest(url, method='GET', body=null) {
 }
 
 async function gdriveFindFile() {
+  // If a shared file ID is configured, use it directly (no search needed)
+  if (GDRIVE_SHARED_FILE_ID) {
+    try {
+      const res = await driveRequest(
+        `https://www.googleapis.com/drive/v3/files/${GDRIVE_SHARED_FILE_ID}?fields=id,modifiedTime`
+      );
+      if (res && res.id) {
+        gdriveFileId = res.id;
+        gdriveLastModified = res.modifiedTime;
+        return true;
+      }
+    } catch(e) {}
+    return false;
+  }
+  // Default: search the user's own Drive by name
   const res = await driveRequest(
     `https://www.googleapis.com/drive/v3/files?q=name%3D'${GDRIVE_FILE_NAME}'+and+trashed%3Dfalse&fields=files(id,modifiedTime)&spaces=drive`
   );
@@ -1267,9 +1312,20 @@ async function gdrivePullAndApply(force = false) {
   gdriveIsPulling = true;
   try {
     // Always re-check the file's current modifiedTime from Drive
-    const res = await driveRequest(
-      `https://www.googleapis.com/drive/v3/files?q=name%3D'${GDRIVE_FILE_NAME}'+and+trashed%3Dfalse&fields=files(id,modifiedTime)&spaces=drive`
-    );
+    let res;
+    if (GDRIVE_SHARED_FILE_ID) {
+      // Shared-file mode: fetch metadata directly by ID
+      try {
+        const meta = await driveRequest(
+          `https://www.googleapis.com/drive/v3/files/${GDRIVE_SHARED_FILE_ID}?fields=id,modifiedTime`
+        );
+        res = meta && meta.id ? { files: [meta] } : null;
+      } catch(e) { res = null; }
+    } else {
+      res = await driveRequest(
+        `https://www.googleapis.com/drive/v3/files?q=name%3D'${GDRIVE_FILE_NAME}'+and+trashed%3Dfalse&fields=files(id,modifiedTime)&spaces=drive`
+      );
+    }
     if (!res || !res.files || !res.files.length) {
       // No Drive file yet — push local data to create it
       await gdrivePushAll();
@@ -2291,6 +2347,41 @@ async function loadSettings() {
   // Always call updateConnectedUI so the settings panel reflects the true
   // current state, even if the user opens Settings before auto-connect finishes.
   updateConnectedUI();
+  // Populate shared file ID
+  const sfInput = document.getElementById('shared-file-id-input');
+  if (sfInput) {
+    sfInput.value = GDRIVE_SHARED_FILE_ID;
+    updateSharedFileIdStatus();
+  }
+}
+
+function updateSharedFileIdStatus() {
+  const el = document.getElementById('shared-file-id-status');
+  if (!el) return;
+  if (GDRIVE_SHARED_FILE_ID) {
+    el.textContent = '✅ Shared file active — all users on this device read/write file ID: ' + GDRIVE_SHARED_FILE_ID;
+    el.style.color = '#166534';
+  } else {
+    el.textContent = '⚠️ No shared file set — each Google account uses its own private Drive file.';
+    el.style.color = '#92400e';
+  }
+}
+
+function saveSharedFileId() {
+  const val = (document.getElementById('shared-file-id-input').value || '').trim();
+  GDRIVE_SHARED_FILE_ID = val;
+  localStorage.setItem('gdriveSharedFileId', val);
+  // Reset file pointer so next sync re-reads from the new file
+  gdriveFileId = val || null;
+  gdriveLastModified = null;
+  updateSharedFileIdStatus();
+  showToast(val ? 'Shared file ID saved. Syncing now…' : 'Shared file ID cleared.', 'success');
+  if (val && gdriveConnected) gdrivePullAndApply(true);
+}
+
+function clearSharedFileId() {
+  document.getElementById('shared-file-id-input').value = '';
+  saveSharedFileId();
 }
 async function saveSettings() {
   const map = { coName:'set-co-name',coAddr:'set-co-addr',coBrn:'set-co-brn',coVat:'set-co-vat',coTel:'set-co-tel',coEmail:'set-co-email',coContact:'set-co-contact' };
@@ -2363,6 +2454,11 @@ async function init() {
   //   3. Desktop GIS silent refresh
   //   4. Falls back to showing Sign-In button
   await tryAutoConnectDrive();
+
+  // After auto-connect attempt finishes, always refresh the UI to show
+  // the true connection state. This fixes the desktop bug where the header
+  // dot goes green but the Settings panel still shows the sign-in button.
+  updateConnectedUI();
 }
 
 init();
