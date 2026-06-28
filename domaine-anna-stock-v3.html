@@ -1108,16 +1108,14 @@ function gdriveSignOut() {
   if (gdriveToken) {
     try { if (typeof google !== 'undefined') google.accounts.oauth2.revoke(gdriveToken); } catch(e) {}
   }
-  gdriveToken = null; gdriveFileId = null; gdriveConnected = false; gdriveUserEmail = '';
+  gdriveToken = null; gdriveFileId = null; gdriveConnected = false;
+  // Keep gdriveUserEmail and gdriveEverConnected so the UI shows
+  // "reconnect" rather than "first time setup" after sign-out
   localStorage.removeItem('gdriveToken');
   localStorage.removeItem('gdriveTokenTime');
   localStorage.removeItem('gdriveTokenExpiry');
-  localStorage.removeItem('gdriveEverConnected');
   stopDrivePoll();
-  setCloudStatus('', 'Offline');
-  setSyncBanner(true);
-  showSyncPanel(false);
-  document.getElementById('firebase-status').textContent = 'Signed out.';
+  updateConnectedUI();
   showToast('Signed out of Google Drive');
 }
 
@@ -1132,25 +1130,46 @@ async function onDriveConnected() {
     if (info && info.email) {
       gdriveUserEmail = info.email;
       localStorage.setItem('gdriveUserEmail', info.email);
-      const lbl = document.getElementById('sync-account-label');
-      if (lbl) lbl.textContent = '👤 ' + info.email;
     }
   } catch(e) {}
 
-  setCloudStatus('connected', 'Drive ✓');
-  setSyncBanner(false);
-  showSyncPanel(true);
-  document.getElementById('firebase-status').textContent = '✅ Connected to Google Drive.';
+  // Update ALL connection-state UI immediately (header dot + settings panel)
+  updateConnectedUI();
   showToast('Google Drive connected ✓', 'success');
 
-  // Find or create Drive file, pull latest, then start polling
+  // ALWAYS pull first so this device gets the latest data from the other device.
+  // Only push if no Drive file exists yet (very first setup).
   const found = await gdriveFindFile();
   if (found) {
-    await gdrivePullAndApply(true);
+    await gdrivePullAndApply(true); // force-apply, ignore modifiedTime comparison
   } else {
-    await gdrivePushAll();
+    await gdrivePushAll(); // first-ever use — seed Drive with local data
   }
   startDrivePoll();
+}
+
+// Central function that updates every piece of UI reflecting connection state.
+// Called from onDriveConnected() AND from loadSettings() so the settings page
+// always shows the correct state no matter when the user opens it.
+function updateConnectedUI() {
+  const connected = gdriveConnected;
+  const email = gdriveUserEmail || localStorage.getItem('gdriveUserEmail') || '';
+
+  setCloudStatus(connected ? 'connected' : '', connected ? 'Drive ✓' : 'Offline');
+  setSyncBanner(!connected);
+  showSyncPanel(connected);
+
+  const lbl = document.getElementById('sync-account-label');
+  if (lbl && email) lbl.textContent = '👤 ' + email;
+
+  const statusEl = document.getElementById('firebase-status');
+  if (statusEl) {
+    statusEl.textContent = connected
+      ? '✅ Connected to Google Drive. Auto-syncing every 15 seconds.'
+      : (localStorage.getItem('gdriveEverConnected')
+          ? 'Session expired — click Sign in with Google to reconnect.'
+          : 'Not connected — click Sign in with Google to enable live sync.');
+  }
 }
 
 // ---- Drive REST helpers ----
@@ -1241,38 +1260,55 @@ async function gdrivePushAll() {
 async function syncToFirebase() { await gdrivePushAll(); }
 
 // ---- Pull Drive → local ----
+let gdriveIsPulling = false;
 async function gdrivePullAndApply(force = false) {
   if (!gdriveConnected || !gdriveToken) return;
+  if (gdriveIsPulling) return; // prevent concurrent pulls
+  gdriveIsPulling = true;
   try {
+    // Always re-check the file's current modifiedTime from Drive
     const res = await driveRequest(
       `https://www.googleapis.com/drive/v3/files?q=name%3D'${GDRIVE_FILE_NAME}'+and+trashed%3Dfalse&fields=files(id,modifiedTime)&spaces=drive`
     );
-    if (!res || !res.files || !res.files.length) { await gdrivePushAll(); return; }
+    if (!res || !res.files || !res.files.length) {
+      // No Drive file yet — push local data to create it
+      await gdrivePushAll();
+      return;
+    }
     gdriveFileId = res.files[0].id;
     const remoteMod = res.files[0].modifiedTime;
-    if (!force && gdriveLastModified && remoteMod <= gdriveLastModified) return;
+
+    // Skip only if we already have this exact version and not forcing
+    if (!force && gdriveLastModified && remoteMod === gdriveLastModified) return;
     gdriveLastModified = remoteMod;
 
+    // Download the file content
     const text = await driveRequest(`https://www.googleapis.com/drive/v3/files/${gdriveFileId}?alt=media`);
     if (!text) return;
     let data;
     try { data = JSON.parse(text); } catch { return; }
 
+    // Replace ALL stores — even if array is empty (supports deletions)
     for (const store of ['bottles','companies','transactions','settings','sales']) {
       const arr = data[store] || [];
-      if (!arr.length) continue;
+      // Clear the store first
       await new Promise(r => {
         const tx = db.transaction(store, 'readwrite');
-        tx.objectStore(store).clear().onsuccess = () => r();
+        const req = tx.objectStore(store).clear();
+        req.onsuccess = () => r();
+        req.onerror  = () => r(); // don't block on error
       });
+      // Write all incoming records
       for (const item of arr) {
         await new Promise(r => {
-          const req = db.transaction(store, 'readwrite').objectStore(store).put(item);
-          req.onsuccess = r; req.onerror = r;
+          const tx2 = db.transaction(store, 'readwrite');
+          const req2 = tx2.objectStore(store).put(item);
+          req2.onsuccess = r; req2.onerror = r;
         });
       }
     }
 
+    // Reload in-memory caches from the freshly-written IndexedDB
     bottles   = await dbGetAll('bottles');
     companies = await dbGetAll('companies');
     sales     = await dbGetAll('sales');
@@ -1280,13 +1316,15 @@ async function gdrivePullAndApply(force = false) {
     await loadLocationLabels();
     populateCompanySelects();
 
+    // Re-render whatever page is currently visible
     const refreshMap = {
-      dashboard: loadDashboard,
-      bottles: renderBottles,
-      stocktake: renderStocktake,
-      sell: renderSellList,
+      dashboard:       loadDashboard,
+      bottles:         renderBottles,
+      stocktake:       renderStocktake,
+      sell:            renderSellList,
       'sales-history': renderSalesHistory,
-      companies: renderCompanies,
+      companies:       renderCompanies,
+      'new-stock':     renderNewStockList,
     };
     if (refreshMap[currentPage]) refreshMap[currentPage]();
 
@@ -1294,17 +1332,26 @@ async function gdrivePullAndApply(force = false) {
     updateLastSyncTime();
   } catch(e) {
     console.error('Drive pull error:', e);
+  } finally {
+    gdriveIsPulling = false;
   }
 }
 
 // ---- Polling ----
+// Poll every 8 seconds while the page is visible; pause when hidden to save battery.
 function startDrivePoll() {
   stopDrivePoll();
-  gdrivePollInterval = setInterval(() => gdrivePullAndApply(false), 15000);
+  gdrivePollInterval = setInterval(() => {
+    if (!document.hidden) gdrivePullAndApply(false);
+  }, 8000);
 }
 function stopDrivePoll() {
   if (gdrivePollInterval) { clearInterval(gdrivePollInterval); gdrivePollInterval = null; }
 }
+// When the user switches back to the tab / app, pull immediately
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && gdriveConnected) gdrivePullAndApply(false);
+});
 
 // ---- Auto-reconnect on load ----
 // On mobile: check if we have a fresh saved token.
@@ -1362,16 +1409,8 @@ async function tryAutoConnectDrive() {
     }
   }
 
-  // 4. Nothing worked — show sign-in button
-  setSyncBanner(everConnected ? false : true);
-  showSyncPanel(false);
-
-  // Restore saved email label even if not connected yet
-  const savedEmail = localStorage.getItem('gdriveUserEmail');
-  if (savedEmail) {
-    const lbl = document.getElementById('sync-account-label');
-    if (lbl) lbl.textContent = '👤 ' + savedEmail + ' (tap Sign In to reconnect)';
-  }
+  // 4. Nothing worked — show sign-in button with correct messaging
+  updateConnectedUI(); // gdriveConnected is false here, will show sign-in panel
 }
 
 let syncTimer = null;
@@ -2249,15 +2288,9 @@ async function loadSettings() {
   document.getElementById('set-co-contact').value = obj.coContact;
   renderTypesList();
   renderLabelEditor();
-  // Sync panel state
-  showSyncPanel(gdriveConnected);
-  if (gdriveConnected && gdriveUserEmail) {
-    const lbl = document.getElementById('sync-account-label');
-    if (lbl) lbl.textContent = '👤 ' + gdriveUserEmail;
-  }
-  document.getElementById('firebase-status').textContent = gdriveConnected
-    ? '✅ Connected to Google Drive. Auto-syncing every 15 seconds.'
-    : 'Not connected — click Sign in with Google to enable live sync.';
+  // Always call updateConnectedUI so the settings panel reflects the true
+  // current state, even if the user opens Settings before auto-connect finishes.
+  updateConnectedUI();
 }
 async function saveSettings() {
   const map = { coName:'set-co-name',coAddr:'set-co-addr',coBrn:'set-co-brn',coVat:'set-co-vat',coTel:'set-co-tel',coEmail:'set-co-email',coContact:'set-co-contact' };
