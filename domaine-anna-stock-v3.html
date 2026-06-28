@@ -982,13 +982,14 @@ function dbDelete(store, key) {
 }
 
 // ===================== GOOGLE DRIVE SYNC =====================
-// Pre-configured for: https://kennyutilities777-eng.github.io/kennystock/domaine-anna-stock-v3.html
-// Client ID is set up in Google Cloud Console for this exact origin.
-// Users just click "Sign in with Google" — no setup needed.
+// Uses redirect-based OAuth (works on Android Chrome without popups or intent dialogs).
+// On desktop the GIS token flow is tried first as it is faster.
 
 const GDRIVE_CLIENT_ID = '426804842945-cojtsavdkj5594fu996b9efbg1ign0o6.apps.googleusercontent.com';
-const GDRIVE_SCOPES    = 'https://www.googleapis.com/auth/drive.file';
+const GDRIVE_SCOPES    = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.email';
 const GDRIVE_FILE_NAME = 'DomaineAnnaStock.json';
+// Redirect URI must exactly match an entry in Google Cloud Console → OAuth → Authorised redirect URIs
+const GDRIVE_REDIRECT_URI = location.origin + location.pathname;
 
 let gdriveToken        = null;
 let gdriveFileId       = null;
@@ -996,8 +997,13 @@ let gdriveConnected    = false;
 let gdrivePollInterval = null;
 let gdriveLastModified = null;
 let gdrivePushing      = false;
-let tokenClient        = null;
+let tokenClient        = null; // GIS token client (desktop)
 let gdriveUserEmail    = '';
+
+// ---- Detect mobile (Android / iOS) ----
+function isMobileBrowser() {
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
 
 // ---- UI helpers ----
 function setCloudStatus(status, label) {
@@ -1018,8 +1024,53 @@ function updateLastSyncTime() {
   if (el) el.textContent = 'Last sync: ' + new Date().toLocaleTimeString();
 }
 
-// ---- Token client init ----
+// ===================== REDIRECT-BASED OAUTH (Mobile) =====================
+// Builds the Google authorisation URL and redirects the page to it.
+// Google redirects back with #access_token=... in the hash.
+function gdriveSignInRedirect() {
+  // Save current page so we can restore after redirect
+  localStorage.setItem('gdriveReturnPage', currentPage || 'dashboard');
+  const params = new URLSearchParams({
+    client_id:     GDRIVE_CLIENT_ID,
+    redirect_uri:  GDRIVE_REDIRECT_URI,
+    response_type: 'token',
+    scope:         GDRIVE_SCOPES,
+    include_granted_scopes: 'true',
+    // No prompt= parameter → Google auto-selects the signed-in account silently
+    // if only one account is present, otherwise shows the chooser only once.
+  });
+  location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + params.toString();
+}
+
+// Called on page load — checks if we're returning from a redirect auth
+async function handleOAuthRedirect() {
+  if (!location.hash.includes('access_token')) return false;
+  const hash = new URLSearchParams(location.hash.slice(1));
+  const token = hash.get('access_token');
+  const expiresIn = parseInt(hash.get('expires_in') || '3599');
+  if (!token) return false;
+
+  // Clean the hash from the URL so refresh doesn't re-trigger
+  history.replaceState(null, '', location.pathname + location.search);
+
+  gdriveToken = token;
+  localStorage.setItem('gdriveToken', token);
+  localStorage.setItem('gdriveTokenTime', Date.now().toString());
+  localStorage.setItem('gdriveTokenExpiry', (Date.now() + expiresIn * 1000).toString());
+
+  await onDriveConnected();
+
+  // Restore the page the user was on before the redirect
+  const returnPage = localStorage.getItem('gdriveReturnPage') || 'dashboard';
+  localStorage.removeItem('gdriveReturnPage');
+  showPage(returnPage);
+
+  return true;
+}
+
+// ===================== GIS TOKEN CLIENT (Desktop) =====================
 function initGdriveTokenClient() {
+  if (typeof google === 'undefined' || !google.accounts) return;
   tokenClient = google.accounts.oauth2.initTokenClient({
     client_id: GDRIVE_CLIENT_ID,
     scope: GDRIVE_SCOPES,
@@ -1032,20 +1083,55 @@ function initGdriveTokenClient() {
       gdriveToken = resp.access_token;
       localStorage.setItem('gdriveToken', gdriveToken);
       localStorage.setItem('gdriveTokenTime', Date.now().toString());
+      localStorage.setItem('gdriveTokenExpiry', (Date.now() + (resp.expires_in||3599) * 1000).toString());
       await onDriveConnected();
     },
   });
 }
 
+// ---- Sign in: redirect on mobile, GIS popup on desktop ----
+function gdriveSignIn() {
+  if (isMobileBrowser()) {
+    gdriveSignInRedirect();
+  } else {
+    if (!tokenClient) initGdriveTokenClient();
+    if (tokenClient) {
+      tokenClient.requestAccessToken({ prompt: '' });
+    } else {
+      // GIS not loaded yet — fall back to redirect
+      gdriveSignInRedirect();
+    }
+  }
+}
+
+function gdriveSignOut() {
+  if (gdriveToken) {
+    try { if (typeof google !== 'undefined') google.accounts.oauth2.revoke(gdriveToken); } catch(e) {}
+  }
+  gdriveToken = null; gdriveFileId = null; gdriveConnected = false; gdriveUserEmail = '';
+  localStorage.removeItem('gdriveToken');
+  localStorage.removeItem('gdriveTokenTime');
+  localStorage.removeItem('gdriveTokenExpiry');
+  localStorage.removeItem('gdriveEverConnected');
+  stopDrivePoll();
+  setCloudStatus('', 'Offline');
+  setSyncBanner(true);
+  showSyncPanel(false);
+  document.getElementById('firebase-status').textContent = 'Signed out.';
+  showToast('Signed out of Google Drive');
+}
+
+// ---- After successful auth ----
 async function onDriveConnected() {
   gdriveConnected = true;
-  markEverConnected(); // remember this device has authenticated before
+  localStorage.setItem('gdriveEverConnected', '1');
 
   // Get user email for display
   try {
     const info = await driveRequest('https://www.googleapis.com/oauth2/v3/userinfo');
     if (info && info.email) {
       gdriveUserEmail = info.email;
+      localStorage.setItem('gdriveUserEmail', info.email);
       const lbl = document.getElementById('sync-account-label');
       if (lbl) lbl.textContent = '👤 ' + info.email;
     }
@@ -1057,35 +1143,14 @@ async function onDriveConnected() {
   document.getElementById('firebase-status').textContent = '✅ Connected to Google Drive.';
   showToast('Google Drive connected ✓', 'success');
 
-  // Find or create Drive file, pull latest, then push local
+  // Find or create Drive file, pull latest, then start polling
   const found = await gdriveFindFile();
   if (found) {
-    await gdrivePullAndApply(true); // force apply on first connect
+    await gdrivePullAndApply(true);
   } else {
-    await gdrivePushAll(); // first time — push local data
+    await gdrivePushAll();
   }
   startDrivePoll();
-}
-
-// ---- Sign in / out ----
-function gdriveSignIn() {
-  if (!tokenClient) initGdriveTokenClient();
-  tokenClient.requestAccessToken({ prompt: 'select_account' });
-}
-
-function gdriveSignOut() {
-  if (gdriveToken) {
-    try { google.accounts.oauth2.revoke(gdriveToken); } catch(e) {}
-  }
-  gdriveToken = null; gdriveFileId = null; gdriveConnected = false; gdriveUserEmail = '';
-  localStorage.removeItem('gdriveToken');
-  localStorage.removeItem('gdriveTokenTime');
-  stopDrivePoll();
-  setCloudStatus('', 'Offline');
-  setSyncBanner(true);
-  showSyncPanel(false);
-  document.getElementById('firebase-status').textContent = 'Signed out.';
-  showToast('Signed out of Google Drive');
 }
 
 // ---- Drive REST helpers ----
@@ -1099,17 +1164,15 @@ async function driveRequest(url, method='GET', body=null) {
   try {
     const resp = await fetch(url, { method, headers, ...(body ? {body} : {}) });
     if (resp.status === 401) {
-      // Token expired mid-session — attempt silent refresh
+      // Token expired — clear it and prompt the user to re-sign-in
       gdriveToken = null;
       gdriveConnected = false;
-      setCloudStatus('error', 'Reconnecting…');
-      if (tokenClient) {
-        tokenClient.requestAccessToken({ prompt: '' });
-      } else {
-        // GIS not ready yet — fall back to showing sign-in panel
-        showSyncPanel(false);
-        setSyncBanner(true);
-      }
+      localStorage.removeItem('gdriveToken');
+      setCloudStatus('error', 'Session expired');
+      stopDrivePoll();
+      showSyncPanel(false);
+      setSyncBanner(true);
+      showToast('Session expired — please sign in again', 'error');
       return null;
     }
     if (!resp.ok) return null;
@@ -1136,7 +1199,6 @@ async function gdriveFindFile() {
 async function gdriveWriteFile(data) {
   const content = JSON.stringify(data);
   if (!gdriveFileId) {
-    // Create new file
     const boundary = 'dabound314159';
     const body =
       `--${boundary}\r\nContent-Type: application/json\r\n\r\n` +
@@ -1149,7 +1211,6 @@ async function gdriveWriteFile(data) {
     );
     if (resp.ok) { const r = await resp.json(); gdriveFileId = r.id; gdriveLastModified = r.modifiedTime; }
   } else {
-    // Update existing file
     const resp = await fetch(
       `https://www.googleapis.com/upload/drive/v3/files/${gdriveFileId}?uploadType=media&fields=modifiedTime`,
       { method: 'PATCH', headers: { 'Authorization': 'Bearer ' + gdriveToken, 'Content-Type': 'application/json' }, body: content }
@@ -1183,17 +1244,15 @@ async function syncToFirebase() { await gdrivePushAll(); }
 async function gdrivePullAndApply(force = false) {
   if (!gdriveConnected || !gdriveToken) return;
   try {
-    // Check modified time
     const res = await driveRequest(
       `https://www.googleapis.com/drive/v3/files?q=name%3D'${GDRIVE_FILE_NAME}'+and+trashed%3Dfalse&fields=files(id,modifiedTime)&spaces=drive`
     );
     if (!res || !res.files || !res.files.length) { await gdrivePushAll(); return; }
     gdriveFileId = res.files[0].id;
     const remoteMod = res.files[0].modifiedTime;
-    if (!force && gdriveLastModified && remoteMod <= gdriveLastModified) return; // no change
+    if (!force && gdriveLastModified && remoteMod <= gdriveLastModified) return;
     gdriveLastModified = remoteMod;
 
-    // Download and apply
     const text = await driveRequest(`https://www.googleapis.com/drive/v3/files/${gdriveFileId}?alt=media`);
     if (!text) return;
     let data;
@@ -1214,7 +1273,6 @@ async function gdrivePullAndApply(force = false) {
       }
     }
 
-    // Reload memory
     bottles   = await dbGetAll('bottles');
     companies = await dbGetAll('companies');
     sales     = await dbGetAll('sales');
@@ -1222,7 +1280,6 @@ async function gdrivePullAndApply(force = false) {
     await loadLocationLabels();
     populateCompanySelects();
 
-    // Refresh current page
     const refreshMap = {
       dashboard: loadDashboard,
       bottles: renderBottles,
@@ -1250,13 +1307,19 @@ function stopDrivePoll() {
 }
 
 // ---- Auto-reconnect on load ----
+// On mobile: check if we have a fresh saved token.
+// On desktop: also try GIS silent refresh.
 async function tryAutoConnectDrive() {
-  const savedToken = localStorage.getItem('gdriveToken');
-  const savedTime  = parseInt(localStorage.getItem('gdriveTokenTime') || '0');
-  const age = Date.now() - savedTime;
+  // 1. First check if we're returning from an OAuth redirect (mobile flow)
+  const wasRedirect = await handleOAuthRedirect();
+  if (wasRedirect) return;
 
-  // If we have a saved token that is still fresh (< 50 min), try it directly
-  if (savedToken && age <= 50 * 60 * 1000) {
+  // 2. Try the saved token if it's still fresh (< 55 min old)
+  const savedToken  = localStorage.getItem('gdriveToken');
+  const tokenExpiry = parseInt(localStorage.getItem('gdriveTokenExpiry') || '0');
+  const stillValid  = tokenExpiry > 0 ? Date.now() < tokenExpiry - 60000 : false;
+
+  if (savedToken && stillValid) {
     gdriveToken = savedToken;
     try {
       const info = await driveRequest('https://www.googleapis.com/oauth2/v3/userinfo');
@@ -1265,54 +1328,50 @@ async function tryAutoConnectDrive() {
         return;
       }
     } catch(e) {}
-    // Token rejected — fall through to silent refresh below
     gdriveToken = null;
   }
 
-  // Token expired or missing — try a silent (no-prompt) refresh if user
-  // previously connected. This avoids the "keep asking" loop on mobile.
+  // 3. On desktop, try GIS silent refresh (prompt:'') — this never triggers a popup
   const everConnected = localStorage.getItem('gdriveEverConnected');
-  if (everConnected) {
-    // Ensure token client is ready before requesting silently
+  if (everConnected && !isMobileBrowser()) {
+    await new Promise(r => setTimeout(r, 600)); // let GIS script load
     if (!tokenClient) initGdriveTokenClient();
-    // Small delay to let GIS library finish loading
-    await new Promise(r => setTimeout(r, 500));
-    try {
-      await new Promise((resolve) => {
-        const originalCallback = tokenClient.callback;
-        // Temporarily wrap callback so we know when silent attempt completes
-        tokenClient.callback = async (resp) => {
-          tokenClient.callback = originalCallback; // restore
-          if (resp.error) {
-            // Silent refresh failed (e.g. user revoked) — show sign-in button
-            setSyncBanner(true);
-            showSyncPanel(false);
+    if (tokenClient) {
+      try {
+        await new Promise((resolve) => {
+          const orig = tokenClient.callback;
+          tokenClient.callback = async (resp) => {
+            tokenClient.callback = orig;
+            if (!resp.error && resp.access_token) {
+              gdriveToken = resp.access_token;
+              localStorage.setItem('gdriveToken', gdriveToken);
+              localStorage.setItem('gdriveTokenTime', Date.now().toString());
+              localStorage.setItem('gdriveTokenExpiry', (Date.now() + (resp.expires_in||3599)*1000).toString());
+              await onDriveConnected();
+            } else {
+              // Silent refresh failed — show sign-in button
+              setSyncBanner(true);
+              showSyncPanel(false);
+            }
             resolve();
-            return;
-          }
-          gdriveToken = resp.access_token;
-          localStorage.setItem('gdriveToken', gdriveToken);
-          localStorage.setItem('gdriveTokenTime', Date.now().toString());
-          await onDriveConnected();
-          resolve();
-        };
-        // prompt:'' means silent — no popup, uses existing Google session
-        tokenClient.requestAccessToken({ prompt: '' });
-      });
-    } catch(e) {
-      setSyncBanner(true);
-      showSyncPanel(false);
+          };
+          tokenClient.requestAccessToken({ prompt: '' });
+        });
+        return;
+      } catch(e) {}
     }
-  } else {
-    // Never connected before — just show the sign-in panel
-    setSyncBanner(true);
-    showSyncPanel(false);
   }
-}
 
-// Called inside onDriveConnected to remember the user ever authenticated
-function markEverConnected() {
-  localStorage.setItem('gdriveEverConnected', '1');
+  // 4. Nothing worked — show sign-in button
+  setSyncBanner(everConnected ? false : true);
+  showSyncPanel(false);
+
+  // Restore saved email label even if not connected yet
+  const savedEmail = localStorage.getItem('gdriveUserEmail');
+  if (savedEmail) {
+    const lbl = document.getElementById('sync-account-label');
+    if (lbl) lbl.textContent = '👤 ' + savedEmail + ' (tap Sign In to reconnect)';
+  }
 }
 
 let syncTimer = null;
@@ -2264,10 +2323,12 @@ async function init() {
   populateCompanySelects();
   await loadDashboard();
   await checkSundayAlert();
-  
-  // Init token client early so GIS library is ready
-  initGdriveTokenClient();
-  // Try auto-reconnect if token saved and still fresh
+
+  // tryAutoConnectDrive handles:
+  //   1. Returning from OAuth redirect (mobile) → calls handleOAuthRedirect()
+  //   2. Fresh saved token → reconnects silently
+  //   3. Desktop GIS silent refresh
+  //   4. Falls back to showing Sign-In button
   await tryAutoConnectDrive();
 }
 
